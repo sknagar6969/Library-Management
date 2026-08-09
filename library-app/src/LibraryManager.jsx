@@ -5,7 +5,7 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebas
 import * as XLSX from "xlsx";
 
 // ⚠️ APNA EMAIL YAHAN LIKHO — sirf yahi email admin hogi
-const ADMIN_EMAIL = "skandhnagar90010@gmail.com";n
+const ADMIN_EMAIL = "skandhnagar90010@gmail.com";
 
 const DEFAULT_BLOCKS = { A: 20, B: 25, C: 20, D: 15, E: 10 };
 
