@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
-import { db } from "./firebase";
-import { ref, onValue, set, update, remove } from "firebase/database";
+import { db, auth } from "./firebase";
+import { ref, onValue, set, remove } from "firebase/database";
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 import * as XLSX from "xlsx";
+
+// ⚠️ APNA EMAIL YAHAN LIKHO — sirf yahi email admin hogi
+const ADMIN_EMAIL = "skandhnagar90010@gmail.com";
 
 const DEFAULT_BLOCKS = { A: 20, B: 25, C: 20, D: 15, E: 10 };
 
@@ -28,8 +32,40 @@ export default function App() {
   const [tempSeats, setTempSeats]     = useState({});
   const [saving, setSaving]           = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [showExpiry, setShowExpiry]   = useState(false);
-  const [fbStatus, setFbStatus]       = useState("connecting"); // connecting | ok | error
+  const [showFeesDue, setShowFeesDue] = useState(false);
+  const [showExpiry, setShowExpiry] = useState(false);
+  const [fbStatus, setFbStatus]       = useState("connecting");
+  const [isAdmin, setIsAdmin]         = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [showLogin, setShowLogin]     = useState(false);
+  const [loginEmail, setLoginEmail]   = useState("");
+  const [loginPass, setLoginPass]     = useState("");
+  const [loginError, setLoginError]   = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [showFeesAmount, setShowFeesAmount] = useState(false);
+
+  // ── Auth state listener ───────────────────────────────
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setIsAdmin(!!(user && user.email === ADMIN_EMAIL));
+      setAuthChecked(true);
+    });
+    return unsub;
+  }, []);
+
+  const handleLogin = async () => {
+    setLoginError(""); setLoginLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPass);
+      setShowLogin(false); setLoginEmail(""); setLoginPass("");
+    } catch (e) {
+      setLoginError("Galat email ya password. Dobara try karo.");
+    }
+    setLoginLoading(false);
+  };
+
+  const handleLogout = () => signOut(auth);
+
 
   // ── Firebase live listener ────────────────────────────
   useEffect(() => {
@@ -151,18 +187,24 @@ export default function App() {
   };
 
   // ── Expiry helpers ────────────────────────────────────
-  const getDaysLeft = (feesDepositDate) => {
-    if (!feesDepositDate) return null;
-    const expiry = new Date(feesDepositDate);
+  const getDaysLeft = (joiningDate) => {
+    if (!joiningDate) return null;
+    const expiry = new Date(joiningDate);
     expiry.setDate(expiry.getDate() + 30);
     expiry.setHours(0,0,0,0);
     const today = new Date(); today.setHours(0,0,0,0);
     return Math.ceil((expiry - today) / 86400000);
   };
 
+  const feesDueStudents = students
+    .filter(s => !parseFloat(s.feesDeposit || 0))
+    .sort((a, b) => (a.block || "").localeCompare(b.block || "") || Number(a.seatNo) - Number(b.seatNo));
+
+  const feesNotDeposited = feesDueStudents.length;
+
   const sortedByExpiry = [...students]
-    .filter(s => s.feesDepositDate)
-    .map(s => ({ ...s, daysLeft: getDaysLeft(s.feesDepositDate) }))
+    .filter(s => s.joiningDate && parseFloat(s.feesDeposit || 0) > 0)
+    .map(s => ({ ...s, daysLeft: getDaysLeft(s.joiningDate) }))
     .sort((a, b) => a.daysLeft - b.daysLeft);
 
   const totalFees = students.reduce((a, s) => a + (parseFloat(s.feesDeposit) || 0), 0);
@@ -181,7 +223,7 @@ export default function App() {
   };
 
   // ── Loading ───────────────────────────────────────────
-  if (loading) return (
+  if (loading || !authChecked) return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "200px", gap: "12px", color: "var(--color-text-secondary)" }}>
       <i className="ti ti-loader-2" style={{ fontSize: "28px" }}></i>
       <span>Firebase se data load ho raha hai…</span>
@@ -220,50 +262,101 @@ export default function App() {
                 🔴 LIVE
               </span>
             </h1>
-            <p style={styles.sub}>Manage seats, students, and fees across all blocks</p>
+            <p style={styles.sub}>
+              {isAdmin
+                ? "Admin Mode — Full Access"
+                : "Guest View — Sirf seat availability dikh rahi hai"}
+            </p>
           </div>
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button onClick={exportToExcel} style={{ ...styles.backBtn, borderColor: "#1D9E75", color: "#1D9E75" }}>
-              <i className="ti ti-file-spreadsheet"></i> Excel Download
-            </button>
-            <button onClick={() => setShowExpiry(true)} style={{ ...styles.backBtn, borderColor: "#E07B2A", color: "#E07B2A" }}>
-              <i className="ti ti-clock-exclamation"></i> Expiry List
-            </button>
-            <button onClick={importFromExcel} style={{ ...styles.backBtn, borderColor: "#6366f1", color: "#6366f1" }}>
-              <i className="ti ti-table-import"></i> Import
-            </button>
-            <button onClick={() => { setTempSeats({ ...blocks }); setShowSettings(true); }} style={styles.backBtn}>
-              <i className="ti ti-settings"></i> Settings
-            </button>
+            {isAdmin && <>
+              <button onClick={exportToExcel} style={{ ...styles.backBtn, borderColor: "#1D9E75", color: "#1D9E75" }}>
+                <i className="ti ti-file-spreadsheet"></i> Excel Download
+              </button>
+              <button onClick={() => setShowExpiry(true)} style={{ ...styles.backBtn, borderColor: "#E07B2A", color: "#E07B2A" }}>
+                <i className="ti ti-clock-exclamation"></i> Expiry List
+              </button>
+              <button onClick={() => setShowFeesDue(true)} style={{ ...styles.backBtn, borderColor: "#DC2626", color: "#DC2626" }}>
+                <i className="ti ti-alert-circle"></i> Fees Due ({feesNotDeposited})
+              </button>
+              <button onClick={importFromExcel} style={{ ...styles.backBtn, borderColor: "#6366f1", color: "#6366f1" }}>
+                <i className="ti ti-table-import"></i> Import
+              </button>
+              <button onClick={() => { setTempSeats({ ...blocks }); setShowSettings(true); }} style={styles.backBtn}>
+                <i className="ti ti-settings"></i> Settings
+              </button>
+              <button onClick={handleLogout} style={{ ...styles.backBtn, borderColor: "#DC2626", color: "#DC2626" }}>
+                <i className="ti ti-logout"></i> Logout
+              </button>
+            </>}
+            {!isAdmin && (
+              <button onClick={() => { setShowLogin(true); setLoginError(""); }} style={{ ...styles.backBtn, borderColor: "#1D9E75", color: "#1D9E75" }}>
+                <i className="ti ti-lock"></i> Admin Login
+              </button>
+            )}
           </div>
         </div>
 
         {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "1.5rem" }}>
-          {[
-            { label: "Total Seats", val: Object.values(blocks).reduce((a,b)=>a+b,0), icon: "ti-armchair" },
-            { label: "Students Enrolled", val: students.length, icon: "ti-users" },
-            { label: "Fees Collected", val: `₹${totalFees.toLocaleString("en-IN")}`, icon: "ti-coin-rupee" }
-          ].map(({ label, val, icon }) => (
-            <div key={label} style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "14px 16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "10px", marginBottom: "1.5rem" }}>          
+            {[
+  { label: "Total Seats", val: Object.values(blocks).reduce((a,b)=>a+b,0), icon: "ti-armchair" },
+  { label: "Students Enrolled", val: students.length, icon: "ti-users" },
+  { 
+    label: "Fees Collected", 
+    val: showFeesAmount ? `₹${totalFees.toLocaleString("en-IN")}` : "••••••", 
+    icon: "ti-coin-rupee",
+    isFees: true
+  },
+  { 
+    label: "Fees Not Deposited", 
+    val: feesNotDeposited, 
+    icon: "ti-alert-circle",
+    isDue: true
+  }      ].map(({ label, val, icon, isFees, isDue }) => (
+            <div
+  key={label}
+  onClick={isDue ? () => setShowFeesDue(true) : undefined}
+  style={{
+    background: "var(--color-background-secondary)",
+    borderRadius: "var(--border-radius-md)",
+    padding: "14px 16px",
+    minHeight: "92px",
+    cursor: isDue ? "pointer" : "default",
+    overflow: "hidden"
+  }}
+>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
                 <i className={`ti ${icon}`} style={{ fontSize: "16px", color: "#1D9E75" }}></i>
                 <p style={{ fontSize: "12px", color: "var(--color-text-secondary)", margin: 0 }}>{label}</p>
               </div>
-              <p style={{ fontSize: "22px", fontWeight: 500, margin: 0 }}>{val}</p>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <p style={{ fontSize: "22px", fontWeight: 500, margin: 0, whiteSpace: "nowrap" }}>{val}</p>
+                {isFees && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setShowFeesAmount(!showFeesAmount); }}
+                    style={{ width: "32px", height: "32px", minWidth: "32px", display: "flex", alignItems: "center", justifyContent: "center", background: "white", border: "1px solid var(--color-border-secondary)", borderRadius: "50%", cursor: "pointer", fontSize: "16px", color: "#1D9E75", flexShrink: 0 }}
+                    title={showFeesAmount ? "Hide amount" : "Show amount"}
+                  >
+                    <i className={`ti ${showFeesAmount ? "ti-eye-off" : "ti-eye"}`}></i>
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
 
-        {/* Search */}
+        {/* Search — admin only */}
+        {isAdmin && (
         <div style={{ position: "relative", marginBottom: "1.25rem" }}>
           <i className="ti ti-search" style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", fontSize: "16px", color: "var(--color-text-secondary)" }}></i>
           <input type="text" placeholder="Search by name, village, or mobile…"
             value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
             style={{ width: "100%", paddingLeft: "38px", boxSizing: "border-box" }} />
         </div>
+        )}
 
-        {searchQuery && (
+        {isAdmin && searchQuery && (
           <div style={{ marginBottom: "1.5rem" }}>
             {filtered.length === 0
               ? <p style={{ color: "var(--color-text-secondary)", fontSize: "14px" }}>No students found.</p>
@@ -293,7 +386,7 @@ export default function App() {
         )}
 
         {/* Block Cards */}
-        {!searchQuery && (
+        {(!isAdmin || !searchQuery) && (
           <>
             <p style={{ fontSize: "13px", color: "var(--color-text-secondary)", marginBottom: "10px" }}>Select a block to view seat layout</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px" }}>
@@ -321,6 +414,47 @@ export default function App() {
               })}
             </div>
           </>
+        )}
+
+        {/* Login Modal */}
+        {showLogin && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, padding: "1rem" }}>
+            <div style={{ background: "var(--color-background-primary)", borderRadius: "var(--border-radius-lg)", width: "100%", maxWidth: "360px", padding: "2rem", border: "0.5px solid var(--color-border-secondary)", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+              <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
+                <div style={{ width: "56px", height: "56px", borderRadius: "50%", background: "#E1F5EE", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}>
+                  <i className="ti ti-lock" style={{ fontSize: "26px", color: "#1D9E75" }}></i>
+                </div>
+                <h2 style={{ fontSize: "20px", fontWeight: 600, margin: "0 0 4px" }}>Admin Login</h2>
+                <p style={{ fontSize: "13px", color: "var(--color-text-secondary)", margin: 0 }}>Sirf authorized admin access kar sakta hai</p>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                <div>
+                  <label style={{ fontSize: "13px", color: "var(--color-text-secondary)", display: "block", marginBottom: "6px" }}>Email</label>
+                  <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
+                    placeholder="admin@email.com" style={{ width: "100%", boxSizing: "border-box" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: "13px", color: "var(--color-text-secondary)", display: "block", marginBottom: "6px" }}>Password</label>
+                  <input type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)}
+                    placeholder="••••••••" style={{ width: "100%", boxSizing: "border-box" }}
+                    onKeyDown={e => e.key === "Enter" && handleLogin()} />
+                </div>
+                {loginError && (
+                  <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: "var(--border-radius-md)", padding: "10px 14px", fontSize: "13px", color: "#DC2626" }}>
+                    <i className="ti ti-alert-circle" style={{ marginRight: "6px" }}></i>{loginError}
+                  </div>
+                )}
+                <button onClick={handleLogin} disabled={loginLoading || !loginEmail || !loginPass}
+                  style={{ background: "#1D9E75", color: "white", border: "none", borderRadius: "var(--border-radius-md)", padding: "11px", fontSize: "15px", cursor: "pointer", opacity: loginLoading ? 0.7 : 1, marginTop: "4px" }}>
+                  {loginLoading ? "Logging in…" : "Login"}
+                </button>
+                <button onClick={() => { setShowLogin(false); setLoginError(""); setLoginEmail(""); setLoginPass(""); }}
+                  style={{ background: "none", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-md)", padding: "9px", fontSize: "14px", cursor: "pointer", color: "var(--color-text-secondary)" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Expiry Modal */}
@@ -353,7 +487,7 @@ export default function App() {
                       const d = s.daysLeft;
                       const clr = d<=0?"#DC2626":d<=7?"#E07B2A":d<=15?"#D4A017":"#1D9E75";
                       const bg  = d<=0?"#FEF2F2":d<=7?"#FFF4ED":d<=15?"#FFFBEB":"#F0FDF8";
-                      const exp = new Date(s.feesDepositDate); exp.setDate(exp.getDate()+30);
+                      const exp = new Date(s.joiningDate); exp.setDate(exp.getDate()+30);
                       return (
                         <div key={s.id} onClick={() => { setSelectedBlock(s.block); setSelectedSeat(s.seatNo); setShowExpiry(false); setView("seat"); }}
                           style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--border-radius-md)", border: `1px solid ${clr}30`, background: bg, cursor: "pointer", marginBottom: "8px" }}>
@@ -378,6 +512,68 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Fees Due Modal */}
+{showFeesDue && (
+  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200, padding: "1rem" }}>
+    <div style={{ background: "var(--color-background-primary)", borderRadius: "var(--border-radius-lg)", width: "100%", maxWidth: "560px", maxHeight: "85vh", display: "flex", flexDirection: "column", border: "0.5px solid var(--color-border-secondary)" }}>
+      <div style={{ padding: "1.25rem 1.5rem", borderBottom: "0.5px solid var(--color-border-secondary)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+        <div>
+          <h2 style={{ fontSize: "17px", fontWeight: 600, margin: 0 }}>
+            <i className="ti ti-alert-circle" style={{ marginRight: "8px", color: "#DC2626" }}></i>
+            Fees Not Deposited List
+          </h2>
+          <p style={{ fontSize: "12px", color: "var(--color-text-secondary)", margin: "3px 0 0" }}>
+            Total {feesNotDeposited} students — jinki fees entry blank/0 hai
+          </p>
+        </div>
+        <button onClick={() => setShowFeesDue(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "20px" }}>
+          <i className="ti ti-x"></i>
+        </button>
+      </div>
+
+      <div style={{ overflowY: "auto", flex: 1, padding: "0.75rem 1.5rem 1.25rem" }}>
+        {feesDueStudents.length === 0
+          ? <p style={{ textAlign: "center", color: "var(--color-text-secondary)", paddingTop: "2rem" }}>Sabhi students ne fees deposit kar di hai ✅</p>
+          : feesDueStudents.map((s, idx) => (
+              <div
+                key={s.id}
+                onClick={() => { setSelectedBlock(s.block); setSelectedSeat(s.seatNo); setShowFeesDue(false); setView("seat"); }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  padding: "10px 12px",
+                  borderRadius: "var(--border-radius-md)",
+                  border: "1px solid #DC262630",
+                  background: "#FEF2F2",
+                  cursor: "pointer",
+                  marginBottom: "8px"
+                }}
+              >
+                <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--color-text-secondary)", width: "22px", textAlign: "right" }}>#{idx+1}</span>
+                <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "#DC262622", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 600, color: "#DC2626", flexShrink: 0 }}>
+                  {s.name.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase()}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontWeight: 600, fontSize: "14px", margin: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</p>
+                  <p style={{ fontSize: "12px", color: "var(--color-text-secondary)", margin: "2px 0 0" }}>
+                    {s.village || "—"} · Block {s.block} · Seat {s.seatNo}
+                  </p>
+                  <p style={{ fontSize: "11px", color: "var(--color-text-secondary)", margin: "1px 0 0" }}>
+                    Joining: {fmtDate(s.joiningDate)}
+                  </p>
+                </div>
+                <span style={{ fontSize: "11px", padding: "4px 8px", borderRadius: "20px", background: "#DC2626", color: "white", flexShrink: 0 }}>
+                  Due
+                </span>
+              </div>
+            ))
+        }
+      </div>
+    </div>
+  </div>
+)}
 
         {/* Settings Modal */}
         {showSettings && (
@@ -476,20 +672,28 @@ export default function App() {
               <p style={styles.sub}>Block {selectedBlock} · {seatStudents.length} student{seatStudents.length !== 1?"s":""}</p>
             </div>
           </div>
+          {isAdmin && (
           <button onClick={openAdd} style={styles.primaryBtn}>
             <i className="ti ti-user-plus"></i> Add Student
           </button>
+          )}
         </div>
 
         {seatStudents.length === 0
           ? <div style={{ textAlign: "center", padding: "3rem", border: "0.5px dashed var(--color-border-secondary)", borderRadius: "var(--border-radius-lg)", color: "var(--color-text-secondary)" }}>
-              <i className="ti ti-user-off" style={{ fontSize: "40px", display: "block", marginBottom: "12px" }}></i>
-              <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 500 }}>No students on this seat</p>
-              <p style={{ margin: 0, fontSize: "13px" }}>Click "Add Student" to assign someone</p>
+              <i className="ti ti-armchair-2" style={{ fontSize: "40px", display: "block", marginBottom: "12px", color: "#1D9E75" }}></i>
+              <p style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: 500 }}>Yeh seat available hai</p>
+              {isAdmin && <p style={{ margin: 0, fontSize: "13px" }}>Click "Add Student" to assign someone</p>}
             </div>
-          : <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          : !isAdmin
+            ? <div style={{ textAlign: "center", padding: "3rem", border: "0.5px solid var(--color-border-secondary)", borderRadius: "var(--border-radius-lg)", background: "var(--color-background-secondary)" }}>
+                <i className="ti ti-user-check" style={{ fontSize: "40px", display: "block", marginBottom: "12px", color: "#1D9E75" }}></i>
+                <p style={{ margin: "0 0 6px", fontSize: "16px", fontWeight: 500 }}>Yeh seat occupied hai</p>
+                <p style={{ margin: 0, fontSize: "13px", color: "var(--color-text-secondary)" }}>Student details sirf admin dekh sakta hai</p>
+              </div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
               {seatStudents.map(s => {
-                const dLeft = getDaysLeft(s.feesDepositDate);
+                const dLeft = getDaysLeft(s.joiningDate);
                 const expClr = dLeft===null?null:dLeft<=0?"#DC2626":dLeft<=7?"#E07B2A":dLeft<=15?"#D4A017":null;
                 return (
                   <div key={s.id} style={styles.card}>
